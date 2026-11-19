@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'dart:async';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sip_ua/sip_ua.dart';
 
@@ -11,9 +12,12 @@ import 'api.dart';
 class SipService extends ChangeNotifier implements SipUaHelperListener {
   SipService._() {
     helper.addSipUaHelperListener(this);
+    _remoteRenderer.initialize();
   }
   static final instance = SipService._();
   final SIPUAHelper helper = SIPUAHelper();
+  static const _platform = MethodChannel('com.dfw.communication/native');
+  final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
   Map<String, dynamic>? config;
   RegistrationStateEnum registration = RegistrationStateEnum.NONE;
   TransportStateEnum transport = TransportStateEnum.NONE;
@@ -129,6 +133,8 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       return;
     }
     try {
+      await _platform.invokeMethod('stopRinging');
+      await _platform.invokeMethod('startCallAudio');
       final stream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
         'video': false,
@@ -145,6 +151,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
   void reject() {
     final call = activeCall;
     if (call == null || !incoming) return;
+    _platform.invokeMethod('stopRinging');
     call.hangup({'status_code': 486, 'reason_phrase': 'Busy Here'});
   }
 
@@ -223,8 +230,29 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     }
     activeCall = call;
     callState = state.state;
+    if (state.state == CallStateEnum.CALL_INITIATION &&
+        call.direction == Direction.incoming) {
+      _platform.invokeMethod('startRinging', {
+        'caller': call.remote_identity ?? 'Unknown caller',
+      });
+    }
+    if (state.state == CallStateEnum.STREAM && state.stream != null) {
+      if (state.originator == Originator.remote) {
+        _remoteRenderer.srcObject = state.stream;
+        for (final track in state.stream!.getAudioTracks()) {
+          track.enabled = true;
+        }
+      } else if (state.originator == Originator.local) {
+        for (final track in state.stream!.getAudioTracks()) {
+          track.enabled = true;
+          track.enableSpeakerphone(false);
+        }
+      }
+    }
     if (state.state == CallStateEnum.ACCEPTED ||
         state.state == CallStateEnum.CONFIRMED) {
+      _platform.invokeMethod('stopRinging');
+      _platform.invokeMethod('startCallAudio');
       _startDuration();
     }
     if (state.state == CallStateEnum.ENDED ||
@@ -232,6 +260,9 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       Future.delayed(const Duration(milliseconds: 500), () {
         if (identical(activeCall, call)) activeCall = null;
         _durationTimer?.cancel();
+        _platform.invokeMethod('stopRinging');
+        _platform.invokeMethod('stopCallAudio');
+        _remoteRenderer.srcObject = null;
         muted = held = speaker = false;
         Helper.setSpeakerphoneOn(false).catchError((_) {});
         durationSeconds = 0;

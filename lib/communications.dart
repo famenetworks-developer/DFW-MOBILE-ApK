@@ -61,11 +61,13 @@ class _SmsHomeState extends State<SmsHome> {
         return ListView(
           padding: const EdgeInsets.all(14),
           children: [
-            const Padding(
-              padding: EdgeInsets.all(8),
+            Padding(
+              padding: const EdgeInsets.all(8),
               child: Text(
                 'Choose a business number',
-                style: TextStyle(color: Colors.white60),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
             ...numbers.map(
@@ -149,7 +151,10 @@ class _SmsThreadsState extends State<SmsThreads> {
           ),
           Text(
             '${widget.number['e164'] ?? ''}',
-            style: const TextStyle(fontSize: 12, color: Colors.white60),
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -287,7 +292,10 @@ class _SmsConversationState extends State<SmsConversation> {
           ),
           Text(
             'From ${widget.number['e164'] ?? ''}',
-            style: const TextStyle(fontSize: 12, color: Colors.white60),
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -342,14 +350,19 @@ class _SmsConversationState extends State<SmsConversation> {
                         children: [
                           Text(
                             '${m['body'] ?? ''}',
-                            style: const TextStyle(fontSize: 16),
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: out ? Colors.white : null,
+                            ),
                           ),
                           const SizedBox(height: 5),
                           Text(
                             '${m['status'] ?? ''}',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 10,
-                              color: Colors.white60,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
                             ),
                           ),
                         ],
@@ -826,65 +839,106 @@ class _ActiveCallState extends State<ActiveCall> {
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
-      child: Column(
-        children: [
-          const Spacer(),
-          Text(
-            widget.number,
-            style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            sip.connected
-                ? _duration(sip.durationSeconds)
-                : sip.callState.name.toLowerCase(),
-            style: const TextStyle(color: Colors.white60, fontSize: 17),
-          ),
-          const Spacer(),
-          Wrap(
-            alignment: WrapAlignment.spaceEvenly,
-            spacing: 32,
-            runSpacing: 24,
-            children: [
-              _CallButton(
-                icon: sip.muted ? Icons.mic_off : Icons.mic,
-                label: 'mute',
-                active: sip.muted,
-                onTap: sip.toggleMute,
-              ),
-              _CallButton(
-                icon: Icons.dialpad,
-                label: 'keypad',
-                onTap: () => showModalBottomSheet(
-                  context: context,
-                  builder: (_) => _DtmfPad(),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxHeight < 650;
+          final buttonSize = constraints.maxWidth < 360 ? 58.0 : 66.0;
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: compact ? 18 : 32,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    SizedBox(height: compact ? 16 : 90),
+                    Column(
+                      children: [
+                        Text(
+                          widget.number,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 30,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          sip.connected
+                              ? _duration(sip.durationSeconds)
+                              : sip.callState.name.toLowerCase(),
+                          style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                            fontSize: 17,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: compact ? 36 : 180),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 520),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _CallButton(
+                            size: buttonSize,
+                            icon: sip.muted ? Icons.mic_off : Icons.mic,
+                            label: 'mute',
+                            active: sip.muted,
+                            onTap: sip.toggleMute,
+                          ),
+                          _CallButton(
+                            size: buttonSize,
+                            icon: Icons.dialpad,
+                            label: 'keypad',
+                            onTap: () => showModalBottomSheet(
+                              context: context,
+                              builder: (_) => _DtmfPad(),
+                            ),
+                          ),
+                          _CallButton(
+                            size: buttonSize,
+                            icon: sip.held ? Icons.play_arrow : Icons.pause,
+                            label: 'hold',
+                            active: sip.held,
+                            onTap: sip.toggleHold,
+                          ),
+                          _CallButton(
+                            size: buttonSize,
+                            icon: sip.speaker
+                                ? Icons.volume_up
+                                : Icons.volume_down,
+                            label: 'speaker',
+                            active: sip.speaker,
+                            onTap: sip.toggleSpeaker,
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: compact ? 30 : 54),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(78, 78),
+                      ),
+                      onPressed: sip.hangup,
+                      icon: const Icon(Icons.call_end, size: 36),
+                    ),
+                    SizedBox(height: compact ? 18 : 42),
+                  ],
                 ),
               ),
-              _CallButton(
-                icon: sip.held ? Icons.play_arrow : Icons.pause,
-                label: 'hold',
-                active: sip.held,
-                onTap: sip.toggleHold,
-              ),
-              _CallButton(
-                icon: sip.speaker ? Icons.volume_up : Icons.volume_down,
-                label: 'speaker',
-                active: sip.speaker,
-                onTap: sip.toggleSpeaker,
-              ),
-            ],
-          ),
-          const SizedBox(height: 55),
-          IconButton.filled(
-            style: IconButton.styleFrom(
-              backgroundColor: Colors.red,
-              minimumSize: const Size(78, 78),
             ),
-            onPressed: sip.hangup,
-            icon: const Icon(Icons.call_end, size: 36),
-          ),
-          const SizedBox(height: 70),
-        ],
+          );
+        },
       ),
     ),
   );
@@ -896,26 +950,34 @@ class _CallButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.active = false,
+    required this.size,
   });
   final IconData icon;
   final String label;
   final VoidCallback onTap;
   final bool active;
+  final double size;
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      IconButton.filled(
-        style: IconButton.styleFrom(
-          backgroundColor: active ? Colors.white : const Color(0xff29383e),
-          foregroundColor: active ? Colors.black : Colors.white,
-          minimumSize: const Size(68, 68),
+  Widget build(BuildContext context) => Expanded(
+    child: Column(
+      children: [
+        IconButton.filled(
+          style: IconButton.styleFrom(
+            backgroundColor: active
+                ? Theme.of(context).colorScheme.onSurface
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
+            foregroundColor: active
+                ? Theme.of(context).colorScheme.surface
+                : Theme.of(context).colorScheme.onSurface,
+            minimumSize: Size(size, size),
+          ),
+          onPressed: onTap,
+          icon: Icon(icon, size: size * .44),
         ),
-        onPressed: onTap,
-        icon: Icon(icon, size: 30),
-      ),
-      const SizedBox(height: 8),
-      Text(label),
-    ],
+        const SizedBox(height: 9),
+        Text(label, maxLines: 1, style: const TextStyle(fontSize: 14)),
+      ],
+    ),
   );
 }
 

@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'api.dart';
 import 'communications.dart';
@@ -26,6 +29,8 @@ class DfwApp extends StatefulWidget {
 class _DfwAppState extends State<DfwApp> {
   Map<String, dynamic>? user;
   bool ready = false;
+  ThemeMode themeMode = ThemeMode.dark;
+  static const storage = FlutterSecureStorage();
   @override
   void initState() {
     super.initState();
@@ -33,15 +38,63 @@ class _DfwAppState extends State<DfwApp> {
   }
 
   Future<void> restore() async {
-    user = await ApiService.instance.restoreUser();
+    final values = await Future.wait([
+      ApiService.instance.restoreUser(),
+      storage.read(key: 'theme_mode'),
+    ]);
+    user = values[0] as Map<String, dynamic>?;
+    themeMode = values[1] == 'light' ? ThemeMode.light : ThemeMode.dark;
     if (mounted) setState(() => ready = true);
+  }
+
+  Future<void> setTheme(ThemeMode value) async {
+    setState(() => themeMode = value);
+    await storage.write(
+      key: 'theme_mode',
+      value: value == ThemeMode.light ? 'light' : 'dark',
+    );
   }
 
   @override
   Widget build(BuildContext c) => MaterialApp(
     debugShowCheckedModeBanner: false,
     title: 'DFW Communication',
-    theme: ThemeData.dark(useMaterial3: true).copyWith(
+    themeMode: themeMode,
+    theme: ThemeData.light(useMaterial3: true).copyWith(
+      scaffoldBackgroundColor: const Color(0xfff4f7f6),
+      colorScheme: const ColorScheme.light(
+        primary: Color(0xff087b65),
+        surface: Colors.white,
+        onSurface: Color(0xff102127),
+        outline: Color(0xffcbd8d4),
+      ),
+      cardTheme: CardThemeData(
+        color: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Color(0xffd5e1de)),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xffcbd8d4)),
+        ),
+      ),
+      navigationBarTheme: const NavigationBarThemeData(
+        backgroundColor: Colors.white,
+        indicatorColor: Color(0xffcfece5),
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Color(0xfff4f7f6),
+        surfaceTintColor: Colors.transparent,
+      ),
+    ),
+    darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
       scaffoldBackgroundColor: ink,
       colorScheme: const ColorScheme.dark(primary: mint, surface: panel),
       cardTheme: CardThemeData(
@@ -71,6 +124,8 @@ class _DfwAppState extends State<DfwApp> {
         ? Login(onLogin: (u) => setState(() => user = u))
         : Shell(
             user: user!,
+            themeMode: themeMode,
+            onThemeChanged: setTheme,
             onLogout: () async {
               await ApiService.instance.logout();
               setState(() => user = null);
@@ -198,10 +253,13 @@ class _LoginState extends State<Login> {
                             ),
                     ),
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       'Your credentials are encrypted in transit and stored securely.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                      style: TextStyle(
+                        color: Theme.of(c).colorScheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),
@@ -215,21 +273,34 @@ class _LoginState extends State<Login> {
 }
 
 class Shell extends StatefulWidget {
-  const Shell({super.key, required this.user, required this.onLogout});
+  const Shell({
+    super.key,
+    required this.user,
+    required this.onLogout,
+    required this.themeMode,
+    required this.onThemeChanged,
+  });
   final Map<String, dynamic> user;
   final VoidCallback onLogout;
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onThemeChanged;
   @override
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
+class _ShellState extends State<Shell> with WidgetsBindingObserver {
+  static const platform = MethodChannel('com.dfw.communication/native');
   int index = 0;
   StreamSubscription? events;
   final sip = SipService.instance;
   bool incomingDialogOpen = false;
+  bool foreground = true;
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    Permission.notification.request();
+    platform.invokeMethod('startService');
     listen();
     sip.addListener(_onCallChanged);
     sip.initialize();
@@ -239,9 +310,20 @@ class _ShellState extends State<Shell> {
     try {
       events = (await ApiService.instance.events()).listen((e) {
         if (mounted && e['type'] == 'message.received') {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('New message received')));
+          final payload = e['data'] as Map? ?? e;
+          final sender =
+              '${payload['sender_name'] ?? payload['contact_name'] ?? 'New message'}';
+          final preview =
+              '${payload['body'] ?? payload['message'] ?? 'Open DFW Communication to read it'}';
+          if (!foreground) {
+            platform.invokeMethod('showMessage', {
+              'title': sender,
+              'body': preview,
+            });
+          } else {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text('$sender: $preview')));
+          }
         }
       });
     } catch (_) {}
@@ -249,9 +331,15 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     events?.cancel();
     sip.removeListener(_onCallChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    foreground = state == AppLifecycleState.resumed;
   }
 
   void _onCallChanged() {
@@ -305,7 +393,15 @@ class _ShellState extends State<Shell> {
       const Conversations(),
       const SmsHome(),
       const Calls(),
-      Settings(user: widget.user, onLogout: widget.onLogout),
+      Settings(
+        user: widget.user,
+        onLogout: () {
+          platform.invokeMethod('stopService');
+          widget.onLogout();
+        },
+        themeMode: widget.themeMode,
+        onThemeChanged: widget.onThemeChanged,
+      ),
     ];
     return Scaffold(
       body: IndexedStack(index: index, children: pages),
@@ -428,9 +524,12 @@ class _DashboardState extends State<Dashboard> {
             style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Conversations, calls, and meetings. One place to get started.',
-            style: TextStyle(color: Colors.white60, fontSize: 16),
+            style: TextStyle(
+              color: Theme.of(c).colorScheme.onSurfaceVariant,
+              fontSize: 16,
+            ),
           ),
           const SizedBox(height: 24),
           LayoutBuilder(
@@ -559,7 +658,10 @@ class Hub extends StatelessWidget {
             Text(
               subtitle,
               maxLines: 3,
-              style: const TextStyle(color: Colors.white60, height: 1.3),
+              style: TextStyle(
+                color: Theme.of(c).colorScheme.onSurfaceVariant,
+                height: 1.3,
+              ),
             ),
             const Spacer(),
             Icon(Icons.arrow_forward, color: color),
@@ -583,7 +685,10 @@ class Metric extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(label, style: const TextStyle(color: Colors.white60)),
+          Text(
+            label,
+            style: TextStyle(color: Theme.of(c).colorScheme.onSurfaceVariant),
+          ),
           const SizedBox(height: 6),
           Text(
             '$value',
@@ -638,7 +743,7 @@ class _ConversationsState extends State<Conversations> {
         return ListView.separated(
           padding: const EdgeInsets.all(12),
           itemCount: rows.length,
-          separatorBuilder: (_, _) => const Divider(height: 1, color: line),
+          separatorBuilder: (_, _) => const Divider(height: 1),
           itemBuilder: (context, i) {
             final row = rows[i];
             final contact = row['contact'] as Map? ?? {};
@@ -757,9 +862,11 @@ class _ChatState extends State<Chat> {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 'The 24-hour customer-service window is closed.',
-                style: TextStyle(color: Colors.white60),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 14),
               ...templates.map(
@@ -899,14 +1006,19 @@ class _ChatState extends State<Chat> {
                             Text(
                               message['body']?.toString() ??
                                   '[${message['message_type'] ?? 'media'}]',
-                              style: const TextStyle(fontSize: 16),
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: outbound ? Colors.white : null,
+                              ),
                             ),
                             const SizedBox(height: 4),
                             Text(
                               '${message['status'] ?? ''}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 10,
-                                color: Colors.white60,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
                               ),
                             ),
                           ],
@@ -1203,9 +1315,17 @@ class _LegacyDialerState extends State<LegacyDialer> {
 }
 
 class Settings extends StatelessWidget {
-  const Settings({super.key, required this.user, required this.onLogout});
+  const Settings({
+    super.key,
+    required this.user,
+    required this.onLogout,
+    required this.themeMode,
+    required this.onThemeChanged,
+  });
   final Map<String, dynamic> user;
   final VoidCallback onLogout;
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onThemeChanged;
   @override
   Widget build(BuildContext c) => Frame(
     title: 'Settings',
@@ -1236,7 +1356,9 @@ class Settings extends StatelessWidget {
                       ),
                       Text(
                         '${user['role'] ?? 'operator'}',
-                        style: const TextStyle(color: Colors.white60),
+                        style: TextStyle(
+                          color: Theme.of(c).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ),
@@ -1249,6 +1371,18 @@ class Settings extends StatelessWidget {
           leading: Icon(Icons.security),
           title: Text('Secure session'),
           subtitle: Text('Access token protected by Android secure storage'),
+        ),
+        SwitchListTile(
+          secondary: Icon(
+            themeMode == ThemeMode.light
+                ? Icons.light_mode_outlined
+                : Icons.dark_mode_outlined,
+          ),
+          title: const Text('Day mode'),
+          subtitle: const Text('Use the light, high-contrast appearance'),
+          value: themeMode == ThemeMode.light,
+          onChanged: (enabled) =>
+              onThemeChanged(enabled ? ThemeMode.light : ThemeMode.dark),
         ),
         const ListTile(
           leading: Icon(Icons.info_outline),
