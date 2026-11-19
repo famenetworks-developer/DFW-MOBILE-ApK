@@ -7,13 +7,18 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.net.wifi.WifiManager
 import androidx.core.app.NotificationCompat
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.embedding.engine.dart.DartExecutor
 
 class CommunicationService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var backgroundBridge: BackgroundNativeBridge? = null
 
     override fun onCreate() {
         super.onCreate()
+        ensureFlutterEngine()
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DFWCommunication:signaling")
             .apply { setReferenceCounted(false); acquire() }
@@ -28,6 +33,16 @@ class CommunicationService : Service() {
             .setSmallIcon(android.R.drawable.stat_sys_phone_call).setContentTitle("DFW Communication is connected")
             .setContentText("Calls and messages are available").setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).setContentIntent(pending).build())
+    }
+
+    private fun ensureFlutterEngine() {
+        if (FlutterEngineCache.getInstance().get("dfw_main_engine") != null) return
+        val engine = FlutterEngine(applicationContext)
+        FlutterEngineCache.getInstance().put("dfw_main_engine", engine)
+        backgroundBridge = BackgroundNativeBridge(applicationContext, engine)
+        engine.dartExecutor.executeDartEntrypoint(
+            DartExecutor.DartEntrypoint.createDefault()
+        )
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
     override fun onBind(intent: Intent?): IBinder? = null

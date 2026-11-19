@@ -4,6 +4,8 @@ import android.app.*
 import android.content.*
 import android.media.*
 import android.os.*
+import android.provider.Settings
+import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -39,9 +41,22 @@ class MainActivity : FlutterActivity() {
                 "startCallAudio" -> { startCallAudio(); result.success(null) }
                 "stopCallAudio" -> { stopCallAudio(); result.success(null) }
                 "showMessage" -> { showMessage(call.argument<String>("title") ?: "New message", call.argument<String>("body") ?: ""); result.success(null) }
+                "requestFullScreenAccess" -> { requestFullScreenAccess(); result.success(null) }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun requestFullScreenAccess() {
+        if (Build.VERSION.SDK_INT < 34 || notifications.canUseFullScreenIntent()) return
+        val preferences = getSharedPreferences("dfw_native", MODE_PRIVATE)
+        if (preferences.getBoolean("full_screen_prompted", false)) return
+        preferences.edit().putBoolean("full_screen_prompted", true).apply()
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                data = Uri.parse("package:$packageName")
+            })
+        } catch (_: Exception) { }
     }
 
     private fun createChannels() {
@@ -64,8 +79,11 @@ class MainActivity : FlutterActivity() {
             if (Build.VERSION.SDK_INT >= 28) isLooping = true
             play()
         }
-        val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP }
-        val pending = PendingIntent.getActivity(this, 20, launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val callScreen = Intent(this, IncomingCallActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("caller", caller)
+        }
+        val pending = PendingIntent.getActivity(this, 20, callScreen, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val answerIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("native_action", "answerCall")
@@ -80,6 +98,7 @@ class MainActivity : FlutterActivity() {
             .setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle("Incoming call").setContentText(caller)
             .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(true).setContentIntent(pending)
+            .setTimeoutAfter(120_000)
             .addAction(android.R.drawable.sym_action_call, "Answer", answer)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline)
             .setFullScreenIntent(pending, true).build()

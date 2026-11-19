@@ -301,6 +301,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     Permission.notification.request();
     platform.invokeMethod('startService');
+    platform.invokeMethod('requestFullScreenAccess');
     listen();
     sip.addListener(_onCallChanged);
     sip.initialize();
@@ -343,7 +344,16 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   }
 
   void _onCallChanged() {
-    if (!mounted || !sip.incoming || incomingDialogOpen) return;
+    if (!mounted) return;
+    // Answer/decline can originate from the native full-screen call UI. Close
+    // the already-open Flutter prompt as soon as SIP starts answering or the
+    // incoming call ends, so the user never has to act twice.
+    if (incomingDialogOpen &&
+        (!sip.incoming || sip.answering || sip.connected || !sip.inCall)) {
+      Navigator.of(context, rootNavigator: true).maybePop();
+      return;
+    }
+    if (!sip.incoming || incomingDialogOpen) return;
     incomingDialogOpen = true;
     final number = sip.activeCall?.remote_identity ?? 'Unknown caller';
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -373,14 +383,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       incomingDialogOpen = false;
       if (!mounted) return;
       if (answer == true) {
-        await sip.answer();
-        if (mounted && sip.inCall) {
+        final started = await sip.answer();
+        if (mounted && started && sip.inCall) {
           Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => ActiveCall(number: number)),
           );
         }
-      } else {
+      } else if (answer == false) {
         sip.reject();
       }
     });
@@ -740,45 +750,52 @@ class _ConversationsState extends State<Conversations> {
         if (rows.isEmpty) {
           return const Center(child: Text('No open conversations'));
         }
-        return ListView.separated(
-          padding: const EdgeInsets.all(12),
-          itemCount: rows.length,
-          separatorBuilder: (_, _) => const Divider(height: 1),
-          itemBuilder: (context, i) {
-            final row = rows[i];
-            final contact = row['contact'] as Map? ?? {};
-            final message = row['last_message'] as Map? ?? {};
-            final name =
-                (contact['profile_name'] ??
-                        contact['phone_number'] ??
-                        'Unknown contact')
-                    .toString();
-            return ListTile(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 8,
-              ),
-              leading: CircleAvatar(
-                backgroundColor: const Color(0xff1a5146),
-                child: Text(name.substring(0, 1).toUpperCase()),
-              ),
-              title: Text(
-                name,
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              subtitle: Text(
-                message['body']?.toString() ?? 'Media message',
-                maxLines: 1,
-              ),
-              trailing: (row['unread_message_count'] ?? 0) > 0
-                  ? Badge(label: Text('${row['unread_message_count']}'))
-                  : const Icon(Icons.chevron_right),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => Chat(conversation: row)),
-              ),
-            );
-          },
+        return ColoredBox(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: ListView.separated(
+            padding: const EdgeInsets.all(12),
+            clipBehavior: Clip.hardEdge,
+            itemCount: rows.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final row = rows[index];
+              final contact = row['contact'] as Map? ?? {};
+              final message = row['last_message'] as Map? ?? {};
+              final name =
+                  (contact['profile_name'] ??
+                          contact['phone_number'] ??
+                          'Unknown contact')
+                      .toString();
+              return RepaintBoundary(
+                key: ValueKey(row['id'] ?? index),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  leading: CircleAvatar(
+                    backgroundColor: const Color(0xff1a5146),
+                    child: Text(name.substring(0, 1).toUpperCase()),
+                  ),
+                  title: Text(
+                    name,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: Text(
+                    message['body']?.toString() ?? 'Media message',
+                    maxLines: 1,
+                  ),
+                  trailing: (row['unread_message_count'] ?? 0) > 0
+                      ? Badge(label: Text('${row['unread_message_count']}'))
+                      : const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => Chat(conversation: row)),
+                  ),
+                ),
+              );
+            },
+          ),
         );
       },
     ),

@@ -15,4 +15,13 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+    <style name="IncomingCallTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#08181E</item>
+        <item name="android:colorAccent">#FFFFFF</item>
+        <item name="android:navigationBarColor">#08181E</item>
+        <item name="android:statusBarColor">#08181E</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>

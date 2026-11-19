@@ -871,6 +871,8 @@ class _ActiveCallState extends State<ActiveCall> {
                         Text(
                           sip.connected
                               ? _duration(sip.durationSeconds)
+                              : sip.answering
+                              ? 'answering…'
                               : sip.callState.name.toLowerCase(),
                           style: TextStyle(
                             color: Theme.of(context)

@@ -30,14 +30,17 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
   CallStateEnum callState = CallStateEnum.NONE;
   String? error;
   bool muted = false, held = false, speaker = false;
+  bool answering = false;
   int durationSeconds = 0;
   Timer? _durationTimer;
   bool _ending = false;
 
   bool get registered => registration == RegistrationStateEnum.REGISTERED;
-  bool get incoming =>
+  bool get _incomingPending =>
       activeCall?.direction == Direction.incoming &&
-      callState == CallStateEnum.CALL_INITIATION;
+      (callState == CallStateEnum.CALL_INITIATION ||
+          callState == CallStateEnum.PROGRESS);
+  bool get incoming => _incomingPending && !answering;
   bool get connected =>
       callState == CallStateEnum.ACCEPTED ||
       callState == CallStateEnum.CONFIRMED ||
@@ -131,25 +134,45 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     }
   }
 
-  Future<void> answer() async {
+  Future<bool> answer() async {
     final call = activeCall;
-    if (call == null || !incoming) return;
+    if (call == null || !incoming || answering) return false;
+    answering = true;
+    error = null;
+    debugPrint(
+      '[SIP call=${call.id ?? 'unknown'}] Answer requested; state=${callState.name}',
+    );
+    notifyListeners();
     if (await Permission.microphone.request() != PermissionStatus.granted) {
       error = 'Microphone permission is required to answer calls.';
+      answering = false;
       notifyListeners();
-      return;
+      return false;
     }
     try {
       await _platform.invokeMethod('stopRinging');
       await _platform.invokeMethod('startCallAudio');
+      debugPrint(
+        '[SIP call=${call.id ?? 'unknown'}] Creating microphone stream',
+      );
       final stream = await _createAudioStream();
-      if (identical(activeCall, call) && incoming) {
-        call.answer(helper.buildCallOptions(true), mediaStream: stream);
-        await Helper.setSpeakerphoneOn(false);
+      if (!identical(activeCall, call) || !_incomingPending) {
+        for (final track in stream.getTracks()) {
+          track.stop();
+        }
+        throw StateError('Incoming call ended before it could be answered.');
       }
+      debugPrint('[SIP call=${call.id ?? 'unknown'}] Invoking SIP answer');
+      call.answer(helper.buildCallOptions(true), mediaStream: stream);
+      await Helper.setSpeakerphoneOn(false);
+      return true;
     } catch (e) {
       error = 'Unable to answer call: $e';
+      answering = false;
+      await _platform.invokeMethod('stopCallAudio');
+      debugPrint('[SIP call=${call.id ?? 'unknown'}] Answer failed: $e');
       notifyListeners();
+      return false;
     }
   }
 
@@ -235,6 +258,11 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     }
     activeCall = call;
     callState = state.state;
+    debugPrint(
+      '[SIP call=${call.id ?? 'unknown'} direction=${call.direction?.name ?? 'unknown'}] '
+      'State=${state.state.name} originator=${state.originator?.name ?? 'none'} '
+      'cause=${state.cause ?? 'none'}',
+    );
     if (state.state == CallStateEnum.CALL_INITIATION &&
         call.direction == Direction.incoming) {
       _platform.invokeMethod('startRinging', {
@@ -253,6 +281,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     }
     if (state.state == CallStateEnum.ACCEPTED ||
         state.state == CallStateEnum.CONFIRMED) {
+      answering = false;
       _platform.invokeMethod('stopRinging');
       _platform.invokeMethod('startCallAudio');
       Helper.setSpeakerphoneOn(false).catchError((_) {});
@@ -267,6 +296,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
         _platform.invokeMethod('stopCallAudio');
         _remoteRenderer.srcObject = null;
         muted = held = speaker = false;
+        answering = false;
         Helper.setSpeakerphoneOn(false).catchError((_) {});
         durationSeconds = 0;
         _ending = false;
