@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import 'api.dart';
 import 'communications.dart';
+import 'sip_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -224,10 +225,14 @@ class Shell extends StatefulWidget {
 class _ShellState extends State<Shell> {
   int index = 0;
   StreamSubscription? events;
+  final sip = SipService.instance;
+  bool incomingDialogOpen = false;
   @override
   void initState() {
     super.initState();
     listen();
+    sip.addListener(_onCallChanged);
+    sip.initialize();
   }
 
   Future<void> listen() async {
@@ -245,7 +250,52 @@ class _ShellState extends State<Shell> {
   @override
   void dispose() {
     events?.cancel();
+    sip.removeListener(_onCallChanged);
     super.dispose();
+  }
+
+  void _onCallChanged() {
+    if (!mounted || !sip.incoming || incomingDialogOpen) return;
+    incomingDialogOpen = true;
+    final number = sip.activeCall?.remote_identity ?? 'Unknown caller';
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final answer = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Incoming call'),
+          content: Text(number),
+          actions: [
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(context, false),
+              icon: const Icon(Icons.call_end),
+              label: const Text('Decline'),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.call),
+              label: const Text('Answer'),
+            ),
+          ],
+        ),
+      );
+      incomingDialogOpen = false;
+      if (!mounted) return;
+      if (answer == true) {
+        await sip.answer();
+        if (mounted && sip.inCall) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ActiveCall(number: number)),
+          );
+        }
+      } else {
+        sip.reject();
+      }
+    });
   }
 
   @override

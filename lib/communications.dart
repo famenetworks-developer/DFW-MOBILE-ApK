@@ -1,4 +1,3 @@
-
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 
@@ -836,12 +835,16 @@ class _ActiveCallState extends State<ActiveCall> {
           ),
           const SizedBox(height: 8),
           Text(
-            sip.callState.name.toLowerCase(),
+            sip.connected
+                ? _duration(sip.durationSeconds)
+                : sip.callState.name.toLowerCase(),
             style: const TextStyle(color: Colors.white60, fontSize: 17),
           ),
           const Spacer(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          Wrap(
+            alignment: WrapAlignment.spaceEvenly,
+            spacing: 32,
+            runSpacing: 24,
             children: [
               _CallButton(
                 icon: sip.muted ? Icons.mic_off : Icons.mic,
@@ -862,6 +865,12 @@ class _ActiveCallState extends State<ActiveCall> {
                 label: 'hold',
                 active: sip.held,
                 onTap: sip.toggleHold,
+              ),
+              _CallButton(
+                icon: sip.speaker ? Icons.volume_up : Icons.volume_down,
+                label: 'speaker',
+                active: sip.speaker,
+                onTap: sip.toggleSpeaker,
               ),
             ],
           ),
@@ -921,13 +930,31 @@ class _DtmfPad extends StatelessWidget {
           .split('')
           .map(
             (x) => TextButton(
-              onPressed: () => SipService.instance.sendDtmf(x),
+              onPressed: () {
+                final sent = SipService.instance.sendDtmf(x);
+                if (!sent) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      duration: Duration(milliseconds: 700),
+                      content: Text(
+                        'DTMF is available after the call connects.',
+                      ),
+                    ),
+                  );
+                }
+              },
               child: Text(x, style: const TextStyle(fontSize: 28)),
             ),
           )
           .toList(),
     ),
   );
+}
+
+String _duration(int seconds) {
+  final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
+  final remainder = (seconds % 60).toString().padLeft(2, '0');
+  return '$minutes:$remainder';
 }
 
 class _Error extends StatelessWidget {

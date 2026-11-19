@@ -1,4 +1,7 @@
 import 'package:flutter/foundation.dart';
+
+import 'dart:async';
+
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sip_ua/sip_ua.dart';
@@ -18,8 +21,18 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
   CallStateEnum callState = CallStateEnum.NONE;
   String? error;
   bool muted = false, held = false, speaker = false;
+  int durationSeconds = 0;
+  Timer? _durationTimer;
+  bool _ending = false;
 
   bool get registered => registration == RegistrationStateEnum.REGISTERED;
+  bool get incoming =>
+      activeCall?.direction == Direction.incoming &&
+      callState == CallStateEnum.CALL_INITIATION;
+  bool get connected =>
+      callState == CallStateEnum.ACCEPTED ||
+      callState == CallStateEnum.CONFIRMED ||
+      callState == CallStateEnum.STREAM;
   bool get inCall =>
       activeCall != null &&
       callState != CallStateEnum.ENDED &&
@@ -32,6 +45,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
   };
 
   Future<void> initialize({bool force = false}) async {
+    if (inCall) return;
     if (!force && (registered || transport == TransportStateEnum.CONNECTING)) {
       return;
     }
@@ -70,6 +84,11 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
   }
 
   Future<bool> call(String number) async {
+    if (inCall) {
+      error = 'Another call is already active.';
+      notifyListeners();
+      return false;
+    }
     if (!registered) {
       await initialize(force: true);
     }
@@ -101,22 +120,85 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     }
   }
 
-  void hangup() => activeCall?.hangup();
+  Future<void> answer() async {
+    final call = activeCall;
+    if (call == null || !incoming) return;
+    if (await Permission.microphone.request() != PermissionStatus.granted) {
+      error = 'Microphone permission is required to answer calls.';
+      notifyListeners();
+      return;
+    }
+    try {
+      final stream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': false,
+      });
+      if (identical(activeCall, call) && incoming) {
+        call.answer(helper.buildCallOptions(true), mediaStream: stream);
+      }
+    } catch (e) {
+      error = 'Unable to answer call: $e';
+      notifyListeners();
+    }
+  }
+
+  void reject() {
+    final call = activeCall;
+    if (call == null || !incoming) return;
+    call.hangup({'status_code': 486, 'reason_phrase': 'Busy Here'});
+  }
+
+  void hangup() {
+    final call = activeCall;
+    if (call == null || _ending) return;
+    _ending = true;
+    try {
+      call.hangup();
+    } finally {
+      Future.delayed(const Duration(seconds: 2), () => _ending = false);
+    }
+  }
+
   void toggleMute() {
-    if (activeCall == null) return;
+    if (activeCall == null || !connected) return;
     muted ? activeCall!.unmute(true, false) : activeCall!.mute(true, false);
     muted = !muted;
     notifyListeners();
   }
 
   void toggleHold() {
-    if (activeCall == null) return;
+    if (activeCall == null || !connected) return;
     held ? activeCall!.unhold() : activeCall!.hold();
     held = !held;
     notifyListeners();
   }
 
-  void sendDtmf(String digit) => activeCall?.sendDTMF(digit);
+  Future<void> toggleSpeaker() async {
+    if (!inCall) return;
+    final next = !speaker;
+    try {
+      await Helper.setSpeakerphoneOn(next);
+      speaker = next;
+      notifyListeners();
+    } catch (e) {
+      error = 'Unable to change audio output: $e';
+      notifyListeners();
+    }
+  }
+
+  bool sendDtmf(String digit) {
+    if (!RegExp(r'^[0-9*#]$').hasMatch(digit)) return false;
+    final call = activeCall;
+    if (call == null || !connected || _ending) return false;
+    try {
+      call.sendDTMF(digit, {'duration': 160, 'interToneGap': 90});
+      return true;
+    } catch (e) {
+      error = 'DTMF failed: $e';
+      notifyListeners();
+      return false;
+    }
+  }
 
   @override
   void registrationStateChanged(RegistrationState state) {
@@ -136,17 +218,38 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
 
   @override
   void callStateChanged(Call call, CallState state) {
+    if (activeCall != null && !identical(activeCall, call) && inCall) {
+      return;
+    }
     activeCall = call;
     callState = state.state;
+    if (state.state == CallStateEnum.ACCEPTED ||
+        state.state == CallStateEnum.CONFIRMED) {
+      _startDuration();
+    }
     if (state.state == CallStateEnum.ENDED ||
         state.state == CallStateEnum.FAILED) {
       Future.delayed(const Duration(milliseconds: 500), () {
-        activeCall = null;
-        muted = held = false;
+        if (identical(activeCall, call)) activeCall = null;
+        _durationTimer?.cancel();
+        muted = held = speaker = false;
+        Helper.setSpeakerphoneOn(false).catchError((_) {});
+        durationSeconds = 0;
+        _ending = false;
         notifyListeners();
       });
     }
     notifyListeners();
+  }
+
+  void _startDuration() {
+    if (_durationTimer?.isActive == true) return;
+    durationSeconds = 0;
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!connected) return;
+      durationSeconds++;
+      notifyListeners();
+    });
   }
 
   @override
