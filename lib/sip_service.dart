@@ -83,7 +83,12 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
         ..displayName = config!['displayName']?.toString() ?? extension
         ..userAgent = 'DFW Communication Android'
         ..dtmfMode = DtmfMode.RFC2833
-        ..contact_uri = 'sip:$extension@$domain';
+        ..iceGatheringTimeout = 5000
+        ..iceServers = <Map<String, String>>[
+          {'urls': 'stun:stun.l.google.com:19302'},
+          {'urls': 'stun:stun.cloudflare.com:3478'},
+        ]
+        ..logCallStatistics = true;
       settings.webSocketSettings.allowBadCertificate = false;
       await helper.start(settings);
     } catch (e) {
@@ -112,10 +117,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       return false;
     }
     try {
-      final stream = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
-        'video': false,
-      });
+      final stream = await _createAudioStream();
       final domain = config!['sipDomain'];
       return await helper.call(
         'sip:$number@$domain',
@@ -140,10 +142,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     try {
       await _platform.invokeMethod('stopRinging');
       await _platform.invokeMethod('startCallAudio');
-      final stream = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
-        'video': false,
-      });
+      final stream = await _createAudioStream();
       if (identical(activeCall, call) && incoming) {
         call.answer(helper.buildCallOptions(true), mediaStream: stream);
         await Helper.setSpeakerphoneOn(false);
@@ -294,6 +293,16 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       track.enabled = true;
     }
   }
+
+  Future<MediaStream> _createAudioStream() =>
+      navigator.mediaDevices.getUserMedia({
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true,
+        },
+        'video': false,
+      });
 
   @override
   void onNewMessage(SIPMessageRequest msg) {}
