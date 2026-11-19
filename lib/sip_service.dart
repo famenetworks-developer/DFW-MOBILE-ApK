@@ -12,12 +12,17 @@ import 'api.dart';
 class SipService extends ChangeNotifier implements SipUaHelperListener {
   SipService._() {
     helper.addSipUaHelperListener(this);
-    _remoteRenderer.initialize();
+    _rendererReady = _remoteRenderer.initialize();
+    _platform.setMethodCallHandler((call) async {
+      if (call.method == 'answerCall') await answer();
+      if (call.method == 'rejectCall') reject();
+    });
   }
   static final instance = SipService._();
   final SIPUAHelper helper = SIPUAHelper();
   static const _platform = MethodChannel('com.dfw.communication/native');
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
+  late final Future<void> _rendererReady;
   Map<String, dynamic>? config;
   RegistrationStateEnum registration = RegistrationStateEnum.NONE;
   TransportStateEnum transport = TransportStateEnum.NONE;
@@ -141,6 +146,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       });
       if (identical(activeCall, call) && incoming) {
         call.answer(helper.buildCallOptions(true), mediaStream: stream);
+        await Helper.setSpeakerphoneOn(false);
       }
     } catch (e) {
       error = 'Unable to answer call: $e';
@@ -238,10 +244,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     }
     if (state.state == CallStateEnum.STREAM && state.stream != null) {
       if (state.originator == Originator.remote) {
-        _remoteRenderer.srcObject = state.stream;
-        for (final track in state.stream!.getAudioTracks()) {
-          track.enabled = true;
-        }
+        _attachRemoteStream(state.stream!);
       } else if (state.originator == Originator.local) {
         for (final track in state.stream!.getAudioTracks()) {
           track.enabled = true;
@@ -253,6 +256,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
         state.state == CallStateEnum.CONFIRMED) {
       _platform.invokeMethod('stopRinging');
       _platform.invokeMethod('startCallAudio');
+      Helper.setSpeakerphoneOn(false).catchError((_) {});
       _startDuration();
     }
     if (state.state == CallStateEnum.ENDED ||
@@ -281,6 +285,14 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       durationSeconds++;
       notifyListeners();
     });
+  }
+
+  Future<void> _attachRemoteStream(MediaStream stream) async {
+    await _rendererReady;
+    _remoteRenderer.srcObject = stream;
+    for (final track in stream.getAudioTracks()) {
+      track.enabled = true;
+    }
   }
 
   @override

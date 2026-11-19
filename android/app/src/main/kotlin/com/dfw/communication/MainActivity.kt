@@ -8,6 +8,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -15,13 +16,21 @@ class MainActivity : FlutterActivity() {
     private lateinit var audio: AudioManager
     private var ringtone: Ringtone? = null
     private var focusRequest: AudioFocusRequest? = null
+    private lateinit var methodChannel: MethodChannel
+
+    override fun provideFlutterEngine(context: Context): FlutterEngine? =
+        FlutterEngineCache.getInstance().get("dfw_main_engine")
+
+    override fun shouldDestroyEngineWithHost(): Boolean = false
 
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
+        FlutterEngineCache.getInstance().put("dfw_main_engine", engine)
         notifications = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         audio = getSystemService(AUDIO_SERVICE) as AudioManager
         createChannels()
-        MethodChannel(engine.dartExecutor.binaryMessenger, "com.dfw.communication/native").setMethodCallHandler { call, result ->
+        methodChannel = MethodChannel(engine.dartExecutor.binaryMessenger, "com.dfw.communication/native")
+        methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startService" -> { ContextCompat.startForegroundService(this, Intent(this, CommunicationService::class.java)); result.success(null) }
                 "stopService" -> { stopService(Intent(this, CommunicationService::class.java)); result.success(null) }
@@ -57,10 +66,22 @@ class MainActivity : FlutterActivity() {
         }
         val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP }
         val pending = PendingIntent.getActivity(this, 20, launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val answerIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("native_action", "answerCall")
+        }
+        val declineIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("native_action", "rejectCall")
+        }
+        val answer = PendingIntent.getActivity(this, 21, answerIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val decline = PendingIntent.getActivity(this, 22, declineIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification = NotificationCompat.Builder(this, "incoming_calls")
             .setSmallIcon(android.R.drawable.sym_call_incoming).setContentTitle("Incoming call").setContentText(caller)
             .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOngoing(true).setContentIntent(pending)
+            .addAction(android.R.drawable.sym_action_call, "Answer", answer)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", decline)
             .setFullScreenIntent(pending, true).build()
         notifications.notify(2001, notification)
     }
@@ -96,5 +117,22 @@ class MainActivity : FlutterActivity() {
             .setSmallIcon(android.R.drawable.sym_action_chat).setContentTitle(title).setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body)).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true).setContentIntent(pending).build())
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNativeAction(intent)
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        handleNativeAction(intent)
+    }
+
+    private fun handleNativeAction(source: Intent?) {
+        val action = source?.getStringExtra("native_action") ?: return
+        source.removeExtra("native_action")
+        if (::methodChannel.isInitialized) methodChannel.invokeMethod(action, null)
     }
 }
