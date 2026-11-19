@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 
 import 'api.dart';
+import 'communications.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -667,11 +668,136 @@ class _ChatState extends State<Chat> {
       setState(reload);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+        if (e is ApiException && e.code == 'outside_customer_window') {
+          await _chooseTemplate();
+        } else {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('$e')));
+        }
       }
     } finally {
       if (mounted) setState(() => sending = false);
+    }
+  }
+
+  Future<void> _chooseTemplate() async {
+    try {
+      final response = await ApiService.instance.get(
+        'api/message-templates',
+        query: {'limit': 100},
+      );
+      final templates = (response as List)
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      if (!mounted) return;
+      if (templates.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No approved templates are available.')),
+        );
+        return;
+      }
+      final selected = await showModalBottomSheet<Map<String, dynamic>>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              const Text(
+                'Choose an approved template',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'The 24-hour customer-service window is closed.',
+                style: TextStyle(color: Colors.white60),
+              ),
+              const SizedBox(height: 14),
+              ...templates.map(
+                (template) => Card(
+                  child: ListTile(
+                    title: Text('${template['name'] ?? 'Template'}'),
+                    subtitle: Text(
+                      '${template['body'] ?? template['template_body'] ?? template['content'] ?? ''}',
+                      maxLines: 3,
+                    ),
+                    onTap: () => Navigator.pop(context, template),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (selected == null || !mounted) return;
+      final variables = List<Map<String, dynamic>>.from(
+        (selected['variables'] as List? ?? []).map(
+          (item) => Map<String, dynamic>.from(item),
+        ),
+      );
+      final values = <String, String>{};
+      if (variables.isNotEmpty) {
+        final controllers = <String, TextEditingController>{
+          for (final variable in variables)
+            '${variable['key']}': TextEditingController(),
+        };
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('${selected['name']}'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: variables
+                    .map(
+                      (variable) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: TextField(
+                          controller: controllers['${variable['key']}'],
+                          decoration: InputDecoration(
+                            labelText:
+                                '${variable['label'] ?? variable['key']}',
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Send template'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) {
+          for (final controller in controllers.values) {
+            controller.dispose();
+          }
+          return;
+        }
+        for (final entry in controllers.entries) {
+          values[entry.key] = entry.value.text.trim();
+          entry.value.dispose();
+        }
+      }
+      await ApiService.instance.post(
+        'api/conversations/${widget.conversation['id']}/messages',
+        data: {'template_id': selected['id'], 'variables': values},
+        idempotent: true,
+      );
+      text.clear();
+      if (mounted) setState(reload);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
     }
   }
 
@@ -779,13 +905,13 @@ class _ChatState extends State<Chat> {
   }
 }
 
-class SmsHome extends StatefulWidget {
-  const SmsHome({super.key});
+class LegacySmsHome extends StatefulWidget {
+  const LegacySmsHome({super.key});
   @override
-  State<SmsHome> createState() => _SmsState();
+  State<LegacySmsHome> createState() => _LegacySmsState();
 }
 
-class _SmsState extends State<SmsHome> {
+class _LegacySmsState extends State<LegacySmsHome> {
   late Future numbers;
   @override
   void initState() {
@@ -819,8 +945,9 @@ class _SmsState extends State<SmsHome> {
                     onTap: () => Navigator.push(
                       c,
                       MaterialPageRoute(
-                        builder: (_) =>
-                            SmsThreads(number: Map<String, dynamic>.from(x)),
+                        builder: (_) => LegacySmsThreads(
+                          number: Map<String, dynamic>.from(x),
+                        ),
                       ),
                     ),
                   ),
@@ -833,8 +960,8 @@ class _SmsState extends State<SmsHome> {
   );
 }
 
-class SmsThreads extends StatelessWidget {
-  const SmsThreads({super.key, required this.number});
+class LegacySmsThreads extends StatelessWidget {
+  const LegacySmsThreads({super.key, required this.number});
   final Map<String, dynamic> number;
   @override
   Widget build(BuildContext c) => Frame(
@@ -873,13 +1000,13 @@ class SmsThreads extends StatelessWidget {
   );
 }
 
-class Calls extends StatefulWidget {
-  const Calls({super.key});
+class LegacyCalls extends StatefulWidget {
+  const LegacyCalls({super.key});
   @override
-  State<Calls> createState() => _CallsState();
+  State<LegacyCalls> createState() => _LegacyCallsState();
 }
 
-class _CallsState extends State<Calls> {
+class _LegacyCallsState extends State<LegacyCalls> {
   late Future data;
   @override
   void initState() {
@@ -895,7 +1022,8 @@ class _CallsState extends State<Calls> {
     title: 'Calls',
     actions: [
       IconButton(
-        onPressed: () => showDialog(context: c, builder: (_) => const Dialer()),
+        onPressed: () =>
+            showDialog(context: c, builder: (_) => const LegacyDialer()),
         icon: const Icon(Icons.dialpad),
       ),
     ],
@@ -961,13 +1089,13 @@ class _CallsState extends State<Calls> {
   );
 }
 
-class Dialer extends StatefulWidget {
-  const Dialer({super.key});
+class LegacyDialer extends StatefulWidget {
+  const LegacyDialer({super.key});
   @override
-  State<Dialer> createState() => _DialerState();
+  State<LegacyDialer> createState() => _LegacyDialerState();
 }
 
-class _DialerState extends State<Dialer> {
+class _LegacyDialerState extends State<LegacyDialer> {
   String n = '';
   @override
   Widget build(BuildContext c) => AlertDialog(
