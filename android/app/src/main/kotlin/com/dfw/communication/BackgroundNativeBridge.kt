@@ -15,7 +15,6 @@ class BackgroundNativeBridge(
 ) {
     private val notifications = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private var ringtone: Ringtone? = null
     private var focusRequest: AudioFocusRequest? = null
 
     init {
@@ -65,10 +64,7 @@ class BackgroundNativeBridge(
 
     private fun startRinging(caller: String) {
         stopRinging()
-        ringtone = RingtoneManager.getRingtone(context, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.apply {
-            if (Build.VERSION.SDK_INT >= 28) isLooping = true
-            play()
-        }
+        CallAlertController.start(context)
         val callScreen = Intent(context, IncomingCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("caller", caller)
@@ -101,9 +97,7 @@ class BackgroundNativeBridge(
     }
 
     private fun stopRinging() {
-        ringtone?.stop()
-        ringtone = null
-        notifications.cancel(2001)
+        CallAlertController.stop(context)
     }
 
     private fun startCallAudio() {

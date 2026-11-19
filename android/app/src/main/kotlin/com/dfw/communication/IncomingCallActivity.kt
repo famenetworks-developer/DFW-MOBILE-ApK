@@ -12,6 +12,8 @@ import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.plugin.common.MethodChannel
 
 class IncomingCallActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,9 +106,15 @@ class IncomingCallActivity : Activity() {
     }
 
     private fun openFlutter(action: String) {
+        CallAlertController.stop(this)
+        val engine = FlutterEngineCache.getInstance().get("dfw_main_engine")
+        if (engine != null) {
+            MethodChannel(engine.dartExecutor.binaryMessenger, "com.dfw.communication/native")
+                .invokeMethod(action, null)
+        }
         val launch = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("native_action", action)
+            if (engine == null) putExtra("native_action", action)
         }
         if (launch != null) startActivity(launch)
         finish()

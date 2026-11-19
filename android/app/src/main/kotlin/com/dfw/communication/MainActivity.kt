@@ -16,7 +16,6 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private lateinit var notifications: NotificationManager
     private lateinit var audio: AudioManager
-    private var ringtone: Ringtone? = null
     private var focusRequest: AudioFocusRequest? = null
     private lateinit var methodChannel: MethodChannel
 
@@ -75,10 +74,7 @@ class MainActivity : FlutterActivity() {
 
     private fun startRinging(caller: String) {
         stopRinging()
-        ringtone = RingtoneManager.getRingtone(applicationContext, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.apply {
-            if (Build.VERSION.SDK_INT >= 28) isLooping = true
-            play()
-        }
+        CallAlertController.start(this)
         val callScreen = Intent(this, IncomingCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("caller", caller)
@@ -106,7 +102,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun stopRinging() {
-        ringtone?.stop(); ringtone = null; notifications.cancel(2001)
+        CallAlertController.stop(this)
     }
 
     private fun startCallAudio() {
