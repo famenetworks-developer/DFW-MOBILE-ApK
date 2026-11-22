@@ -750,60 +750,66 @@ class _ConversationsState extends State<Conversations> {
         if (rows.isEmpty) {
           return const Center(child: Text('No open conversations'));
         }
-        return ClipRect(
-          child: ColoredBox(
-            color: Theme.of(context).scaffoldBackgroundColor,
-            child: ListView.custom(
-              padding: const EdgeInsets.all(12),
-              clipBehavior: Clip.hardEdge,
-              scrollCacheExtent: const ScrollCacheExtent.pixels(160),
-              childrenDelegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  if (index.isOdd) return const Divider(height: 1);
-                  final rowIndex = index ~/ 2;
-                  final row = rows[rowIndex];
-                  final contact = row['contact'] as Map? ?? {};
-                  final message = row['last_message'] as Map? ?? {};
-                  final name =
-                      (contact['profile_name'] ??
-                              contact['phone_number'] ??
-                              'Unknown contact')
-                          .toString();
-                  return ListTile(
-                    key: ValueKey(row['id'] ?? rowIndex),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    leading: CircleAvatar(
-                      backgroundColor: const Color(0xff1a5146),
-                      child: Text(name.substring(0, 1).toUpperCase()),
-                    ),
-                    title: Text(
-                      name,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    subtitle: Text(
-                      message['body']?.toString() ?? 'Media message',
-                      maxLines: 1,
-                    ),
-                    trailing: (row['unread_message_count'] ?? 0) > 0
-                        ? Badge(label: Text('${row['unread_message_count']}'))
-                        : const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => Chat(conversation: row),
-                      ),
-                    ),
-                  );
-                },
-                childCount: rows.length * 2 - 1,
-                addAutomaticKeepAlives: false,
-                addRepaintBoundaries: false,
-                addSemanticIndexes: true,
-              ),
+        return ConversationList(
+          rows: rows,
+          onOpen: (row) => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => Chat(conversation: row)),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+class ConversationList extends StatelessWidget {
+  const ConversationList({super.key, required this.rows, required this.onOpen});
+
+  final List<Map<String, dynamic>> rows;
+  final ValueChanged<Map<String, dynamic>> onOpen;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Theme.of(context).scaffoldBackgroundColor,
+    child: ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: rows.length,
+      itemExtent: 81,
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        final contact = row['contact'] as Map? ?? {};
+        final message = row['last_message'] as Map? ?? {};
+        final name =
+            (contact['profile_name'] ??
+                    contact['phone_number'] ??
+                    'Unknown contact')
+                .toString();
+        return DecoratedBox(
+          key: ValueKey(row['id'] ?? index),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Theme.of(context).dividerColor),
             ),
+          ),
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+            leading: CircleAvatar(
+              backgroundColor: const Color(0xff1a5146),
+              child: Text(name.substring(0, 1).toUpperCase()),
+            ),
+            title: Text(
+              name,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              message['body']?.toString() ?? 'Media message',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: (row['unread_message_count'] ?? 0) > 0
+                ? Badge(label: Text('${row['unread_message_count']}'))
+                : const Icon(Icons.chevron_right),
+            onTap: () => onOpen(row),
           ),
         );
       },
