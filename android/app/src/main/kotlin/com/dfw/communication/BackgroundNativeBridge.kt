@@ -3,8 +3,10 @@ package com.dfw.communication
 import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.media.*
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
+import android.provider.ContactsContract
 import androidx.core.app.NotificationCompat
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -14,12 +16,11 @@ class BackgroundNativeBridge(
     engine: FlutterEngine
 ) {
     private val notifications = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private var focusRequest: AudioFocusRequest? = null
-
     init {
         createChannels()
-        MethodChannel(engine.dartExecutor.binaryMessenger, "com.dfw.communication/native")
+        val methodChannel = MethodChannel(engine.dartExecutor.binaryMessenger, "com.dfw.communication/native")
+        AudioRouteManager.attach(context, methodChannel)
+        methodChannel
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "startService" -> result.success(null)
@@ -32,8 +33,19 @@ class BackgroundNativeBridge(
                         result.success(null)
                     }
                     "stopRinging" -> { stopRinging(); result.success(null) }
-                    "startCallAudio" -> { startCallAudio(); result.success(null) }
-                    "stopCallAudio" -> { stopCallAudio(); result.success(null) }
+                    "startCallAudio" -> result.success(AudioRouteManager.start())
+                    "stopCallAudio" -> { AudioRouteManager.stop(); result.success(null) }
+                    "getAudioRoutes" -> result.success(AudioRouteManager.state())
+                    "setAudioRoute" -> runCatching {
+                        AudioRouteManager.select(call.argument<String>("route") ?: error("Missing route"))
+                    }.fold(result::success) { result.error("audio_route", it.message, null) }
+                    "addContact" -> runCatching {
+                        context.startActivity(Intent(ContactsContract.Intents.Insert.ACTION).apply {
+                            type = ContactsContract.RawContacts.CONTENT_TYPE
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            putExtra(ContactsContract.Intents.Insert.PHONE, call.argument<String>("number"))
+                        })
+                    }.fold({ result.success(null) }) { result.error("contacts", it.message, null) }
                     "showMessage" -> {
                         showMessage(call.argument<String>("title") ?: "New message", call.argument<String>("body") ?: "")
                         result.success(null)
@@ -98,27 +110,6 @@ class BackgroundNativeBridge(
 
     private fun stopRinging() {
         CallAlertController.stop(context)
-    }
-
-    private fun startCallAudio() {
-        stopRinging()
-        audio.mode = AudioManager.MODE_IN_COMMUNICATION
-        @Suppress("DEPRECATION")
-        audio.isSpeakerphoneOn = false
-        val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-        if (Build.VERSION.SDK_INT >= 26) {
-            focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attributes).build()
-            audio.requestAudioFocus(focusRequest!!)
-        } else @Suppress("DEPRECATION") audio.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-    }
-
-    private fun stopCallAudio() {
-        if (Build.VERSION.SDK_INT >= 26) focusRequest?.let { audio.abandonAudioFocusRequest(it) }
-        else @Suppress("DEPRECATION") audio.abandonAudioFocus(null)
-        focusRequest = null
-        @Suppress("DEPRECATION")
-        audio.isSpeakerphoneOn = false
-        audio.mode = AudioManager.MODE_NORMAL
     }
 
     private fun showMessage(title: String, body: String) {

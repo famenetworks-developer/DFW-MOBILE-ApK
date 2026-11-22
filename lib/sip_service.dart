@@ -9,6 +9,12 @@ import 'package:sip_ua/sip_ua.dart';
 
 import 'api.dart';
 
+class AudioRoute {
+  const AudioRoute(this.id, this.label);
+  final String id;
+  final String label;
+}
+
 class SipService extends ChangeNotifier implements SipUaHelperListener {
   SipService._() {
     helper.addSipUaHelperListener(this);
@@ -16,6 +22,9 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     _platform.setMethodCallHandler((call) async {
       if (call.method == 'answerCall') await answer();
       if (call.method == 'rejectCall') reject();
+      if (call.method == 'audioRoutesChanged') {
+        _applyAudioState(call.arguments);
+      }
     });
   }
   static final instance = SipService._();
@@ -29,7 +38,9 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
   Call? activeCall;
   CallStateEnum callState = CallStateEnum.NONE;
   String? error;
-  bool muted = false, held = false, speaker = false;
+  bool muted = false, held = false;
+  List<AudioRoute> audioRoutes = const [];
+  String? selectedAudioRoute;
   bool answering = false;
   int durationSeconds = 0;
   Timer? _durationTimer;
@@ -119,6 +130,7 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       notifyListeners();
       return false;
     }
+    await Permission.bluetoothConnect.request();
     try {
       final stream = await _createAudioStream();
       final domain = config!['sipDomain'];
@@ -149,9 +161,10 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       notifyListeners();
       return false;
     }
+    await Permission.bluetoothConnect.request();
     try {
       await _platform.invokeMethod('stopRinging');
-      await _platform.invokeMethod('startCallAudio');
+      _applyAudioState(await _platform.invokeMethod('startCallAudio'));
       debugPrint(
         '[SIP call=${call.id ?? 'unknown'}] Creating microphone stream',
       );
@@ -164,7 +177,6 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
       }
       debugPrint('[SIP call=${call.id ?? 'unknown'}] Invoking SIP answer');
       call.answer(helper.buildCallOptions(true), mediaStream: stream);
-      await Helper.setSpeakerphoneOn(false);
       return true;
     } catch (e) {
       error = 'Unable to answer call: $e';
@@ -208,16 +220,27 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
     notifyListeners();
   }
 
-  Future<void> toggleSpeaker() async {
+  Future<void> refreshAudioRoutes() async {
     if (!inCall) return;
-    final next = !speaker;
     try {
-      await Helper.setSpeakerphoneOn(next);
-      speaker = next;
+      _applyAudioState(await _platform.invokeMethod('getAudioRoutes'));
+    } catch (e) {
+      error = 'Unable to read audio outputs: $e';
       notifyListeners();
+    }
+  }
+
+  Future<bool> setAudioRoute(String route) async {
+    if (!inCall) return false;
+    try {
+      _applyAudioState(
+        await _platform.invokeMethod('setAudioRoute', {'route': route}),
+      );
+      return selectedAudioRoute == route;
     } catch (e) {
       error = 'Unable to change audio output: $e';
       notifyListeners();
+      return false;
     }
   }
 
@@ -283,8 +306,10 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
         state.state == CallStateEnum.CONFIRMED) {
       answering = false;
       _platform.invokeMethod('stopRinging');
-      _platform.invokeMethod('startCallAudio');
-      Helper.setSpeakerphoneOn(false).catchError((_) {});
+      _platform
+          .invokeMethod('startCallAudio')
+          .then(_applyAudioState)
+          .catchError((_) {});
       _startDuration();
     }
     if (state.state == CallStateEnum.ENDED ||
@@ -295,9 +320,10 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
         _platform.invokeMethod('stopRinging');
         _platform.invokeMethod('stopCallAudio');
         _remoteRenderer.srcObject = null;
-        muted = held = speaker = false;
+        muted = held = false;
+        audioRoutes = const [];
+        selectedAudioRoute = null;
         answering = false;
-        Helper.setSpeakerphoneOn(false).catchError((_) {});
         durationSeconds = 0;
         _ending = false;
         notifyListeners();
@@ -333,6 +359,25 @@ class SipService extends ChangeNotifier implements SipUaHelperListener {
         },
         'video': false,
       });
+
+  void _applyAudioState(dynamic value) {
+    if (value is! Map) return;
+    final rawRoutes = value['routes'];
+    audioRoutes = rawRoutes is List
+        ? rawRoutes
+              .whereType<Map>()
+              .map((route) {
+                return AudioRoute(
+                  route['id']?.toString() ?? '',
+                  route['label']?.toString() ?? '',
+                );
+              })
+              .where((route) => route.id.isNotEmpty)
+              .toList(growable: false)
+        : const [];
+    selectedAudioRoute = value['selected']?.toString();
+    notifyListeners();
+  }
 
   @override
   void onNewMessage(SIPMessageRequest msg) {}

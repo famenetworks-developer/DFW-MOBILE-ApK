@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/services.dart';
 
 import 'api.dart';
 import 'sip_service.dart';
@@ -430,6 +431,14 @@ class _NewSmsSheetState extends State<NewSmsSheet> {
   late Map<String, dynamic> number = widget.numbers.first;
   final phone = TextEditingController(), text = TextEditingController();
   bool busy = false;
+
+  @override
+  void dispose() {
+    phone.dispose();
+    text.dispose();
+    super.dispose();
+  }
+
   Future<void> send() async {
     final p = phone.text.trim(), body = text.text.trim();
     if (!RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(p) || body.isEmpty) return;
@@ -674,6 +683,7 @@ class IphoneDialer extends StatefulWidget {
 }
 
 class _IphoneDialerState extends State<IphoneDialer> {
+  static const _platform = MethodChannel('com.dfw.communication/native');
   String number = '';
   static const keys = [
     ['1', ''],
@@ -723,7 +733,18 @@ class _IphoneDialerState extends State<IphoneDialer> {
           ),
           if (number.isNotEmpty)
             TextButton(
-              onPressed: () {},
+              onPressed: () async {
+                try {
+                  await _platform.invokeMethod('addContact', {
+                    'number': number,
+                  });
+                } catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Unable to open contacts: $error')),
+                  );
+                }
+              },
               child: const Text(
                 'Add Number',
                 style: TextStyle(color: Colors.blueAccent),
@@ -819,6 +840,9 @@ class _ActiveCallState extends State<ActiveCall> {
   void initState() {
     super.initState();
     sip.addListener(changed);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => sip.refreshAudioRoutes(),
+    );
   }
 
   @override
@@ -914,12 +938,10 @@ class _ActiveCallState extends State<ActiveCall> {
                           ),
                           _CallButton(
                             size: buttonSize,
-                            icon: sip.speaker
-                                ? Icons.volume_up
-                                : Icons.volume_down,
-                            label: 'speaker',
-                            active: sip.speaker,
-                            onTap: sip.toggleSpeaker,
+                            icon: _audioRouteIcon(sip.selectedAudioRoute),
+                            label: _audioRouteLabel(sip),
+                            active: sip.selectedAudioRoute == 'speaker',
+                            onTap: () => _chooseAudioRoute(context),
                           ),
                         ],
                       ),
@@ -944,7 +966,58 @@ class _ActiveCallState extends State<ActiveCall> {
       ),
     ),
   );
+
+  Future<void> _chooseAudioRoute(BuildContext context) async {
+    await sip.refreshAudioRoutes();
+    if (!context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text(
+                'Audio output',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            ...sip.audioRoutes.map(
+              (route) => ListTile(
+                leading: Icon(_audioRouteIcon(route.id)),
+                title: Text(route.label),
+                trailing: sip.selectedAudioRoute == route.id
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () async {
+                  final selected = await sip.setAudioRoute(route.id);
+                  if (selected && sheetContext.mounted) {
+                    Navigator.pop(sheetContext);
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+
+IconData _audioRouteIcon(String? route) => switch (route) {
+  'speaker' => Icons.volume_up,
+  'bluetooth' => Icons.bluetooth_audio,
+  'wired' => Icons.headphones,
+  _ => Icons.phone_in_talk,
+};
+
+String _audioRouteLabel(SipService sip) =>
+    sip.audioRoutes
+        .where((route) => route.id == sip.selectedAudioRoute)
+        .map((route) => route.label.toLowerCase())
+        .firstOrNull ??
+    'audio';
 
 class _CallButton extends StatelessWidget {
   const _CallButton({

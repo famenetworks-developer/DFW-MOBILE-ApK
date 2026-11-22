@@ -145,6 +145,14 @@ class _LoginState extends State<Login> {
   final email = TextEditingController(), pass = TextEditingController();
   bool busy = false, hide = true;
   String? error;
+
+  @override
+  void dispose() {
+    email.dispose();
+    pass.dispose();
+    super.dispose();
+  }
+
   Future<void> submit() async {
     if (email.text.trim().isEmpty || pass.text.isEmpty) {
       setState(() => error = 'Enter your email and password.');
@@ -835,6 +843,12 @@ class _ChatState extends State<Chat> {
     ApiService.instance.post(
       'api/conversations/${widget.conversation['id']}/read',
     );
+  }
+
+  @override
+  void dispose() {
+    text.dispose();
+    super.dispose();
   }
 
   void reload() => messages = ApiService.instance.get(

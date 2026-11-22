@@ -2,9 +2,11 @@ package com.dfw.communication
 
 import android.app.*
 import android.content.*
-import android.media.*
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.*
 import android.provider.Settings
+import android.provider.ContactsContract
 import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -15,8 +17,6 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private lateinit var notifications: NotificationManager
-    private lateinit var audio: AudioManager
-    private var focusRequest: AudioFocusRequest? = null
     private lateinit var methodChannel: MethodChannel
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? =
@@ -28,17 +28,27 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(engine)
         FlutterEngineCache.getInstance().put("dfw_main_engine", engine)
         notifications = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        audio = getSystemService(AUDIO_SERVICE) as AudioManager
         createChannels()
         methodChannel = MethodChannel(engine.dartExecutor.binaryMessenger, "com.dfw.communication/native")
+        AudioRouteManager.attach(this, methodChannel)
         methodChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startService" -> { ContextCompat.startForegroundService(this, Intent(this, CommunicationService::class.java)); result.success(null) }
                 "stopService" -> { stopService(Intent(this, CommunicationService::class.java)); result.success(null) }
                 "startRinging" -> { startRinging(call.argument<String>("caller") ?: "Incoming call"); result.success(null) }
                 "stopRinging" -> { stopRinging(); result.success(null) }
-                "startCallAudio" -> { startCallAudio(); result.success(null) }
-                "stopCallAudio" -> { stopCallAudio(); result.success(null) }
+                "startCallAudio" -> result.success(AudioRouteManager.start())
+                "stopCallAudio" -> { AudioRouteManager.stop(); result.success(null) }
+                "getAudioRoutes" -> result.success(AudioRouteManager.state())
+                "setAudioRoute" -> runCatching {
+                    AudioRouteManager.select(call.argument<String>("route") ?: error("Missing route"))
+                }.fold(result::success) { result.error("audio_route", it.message, null) }
+                "addContact" -> runCatching {
+                    startActivity(Intent(ContactsContract.Intents.Insert.ACTION).apply {
+                        type = ContactsContract.RawContacts.CONTENT_TYPE
+                        putExtra(ContactsContract.Intents.Insert.PHONE, call.argument<String>("number"))
+                    })
+                }.fold({ result.success(null) }) { result.error("contacts", it.message, null) }
                 "showMessage" -> { showMessage(call.argument<String>("title") ?: "New message", call.argument<String>("body") ?: ""); result.success(null) }
                 "requestFullScreenAccess" -> { requestFullScreenAccess(); result.success(null) }
                 else -> result.notImplemented()
@@ -103,27 +113,6 @@ class MainActivity : FlutterActivity() {
 
     private fun stopRinging() {
         CallAlertController.stop(this)
-    }
-
-    private fun startCallAudio() {
-        stopRinging()
-        audio.mode = AudioManager.MODE_IN_COMMUNICATION
-        @Suppress("DEPRECATION")
-        audio.isSpeakerphoneOn = false
-        val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-        if (Build.VERSION.SDK_INT >= 26) {
-            focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attributes).build()
-            audio.requestAudioFocus(focusRequest!!)
-        } else @Suppress("DEPRECATION") audio.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-    }
-
-    private fun stopCallAudio() {
-        if (Build.VERSION.SDK_INT >= 26) focusRequest?.let { audio.abandonAudioFocusRequest(it) }
-        else @Suppress("DEPRECATION") audio.abandonAudioFocus(null)
-        focusRequest = null
-        @Suppress("DEPRECATION")
-        audio.isSpeakerphoneOn = false
-        audio.mode = AudioManager.MODE_NORMAL
     }
 
     private fun showMessage(title: String, body: String) {
